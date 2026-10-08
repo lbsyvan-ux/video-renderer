@@ -26,14 +26,11 @@ app.add_middleware(
 VIDEOS_DIR = Path("/app/videos")
 VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Musiques douces libres de droits par défaut (Piano stoïcien / contemplatif)
+LOCAL_AUDIO = Path(__file__).parent / "gymnopedie.ogg"
+
+# Musique douce libre de droits par défaut (Erik Satie - Gymnopédie No. 1, piano doux et contemplatif)
 DEFAULT_AUDIO_TRACKS = [
-    # Erik Satie - Gymnopédie No. 1
-    "https://upload.wikimedia.org/wikipedia/commons/b/b7/Gymnopedie_No._1..ogg",
-    # Claude Debussy - Clair de Lune
-    "https://upload.wikimedia.org/wikipedia/commons/b/be/Clair_de_lune_%28Claude_Debussy%29_Suite_bergamasque.ogg",
-    # Beethoven - Sonate au Clair de Lune (Adagio)
-    "https://upload.wikimedia.org/wikipedia/commons/d/d0/Moonlight_Sonata.ogg"
+    "https://upload.wikimedia.org/wikipedia/commons/b/b7/Gymnopedie_No._1..ogg"
 ]
 
 LOCAL_FONT = Path(__file__).parent / "Montserrat-Bold.ttf"
@@ -107,19 +104,29 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
                 if chunk:
                     f.write(chunk)
 
-        # 2. Télécharger la musique douce
-        target_audio_url = req.audio_url if req.audio_url else random.choice(DEFAULT_AUDIO_TRACKS)
+        # 2. Gestion de la musique douce (Fichier local en priorité, sinon téléchargement)
         has_audio = False
-        try:
-            audio_resp = requests.get(target_audio_url, headers=headers, stream=True, timeout=20)
-            if audio_resp.status_code == 200:
-                with open(input_audio_path, "wb") as f:
-                    for chunk in audio_resp.iter_content(chunk_size=512 * 1024):
-                        if chunk:
-                            f.write(chunk)
-                has_audio = True
-        except Exception:
-            has_audio = False
+        audio_error_detail = None
+
+        if LOCAL_AUDIO.exists() and not req.audio_url:
+            input_audio_path = LOCAL_AUDIO
+            has_audio = True
+        else:
+            target_audio_url = req.audio_url if req.audio_url else random.choice(DEFAULT_AUDIO_TRACKS)
+            input_audio_path = temp_dir / "audio.ogg"
+            try:
+                audio_resp = requests.get(target_audio_url, headers=headers, stream=True, timeout=30)
+                if audio_resp.status_code == 200:
+                    with open(input_audio_path, "wb") as f:
+                        for chunk in audio_resp.iter_content(chunk_size=512 * 1024):
+                            if chunk:
+                                f.write(chunk)
+                    has_audio = True
+                else:
+                    audio_error_detail = f"HTTP {audio_resp.status_code}"
+            except Exception as e:
+                audio_error_detail = str(e)
+                has_audio = False
 
         # 3. Formater le texte (lignes courtes et percutantes comme sur TikTok/Reels)
         clean_text = req.text.strip().strip('"').strip("'")
@@ -147,12 +154,12 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
             f"shadowcolor=black@0.8:shadowx=3:shadowy=3"
         )
 
-        fade_out_start = max(1.0, req.duration - 1.5)
+        fade_out_start = max(1.0, req.duration - 1.0)
 
         if has_audio:
             filter_complex = (
                 f"[0:v]{vf_filter}[v];"
-                f"[1:a]volume=0.30,afade=t=in:st=0:d=0.8,afade=t=out:st={fade_out_start}:d=1.5[a]"
+                f"[1:a]volume=0.85,afade=t=in:st=0:d=0.5,afade=t=out:st={fade_out_start}:d=1.0[a]"
             )
             cmd = [
                 "ffmpeg",
@@ -218,6 +225,7 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
             "filename": output_filename,
             "duration": req.duration,
             "has_audio": has_audio,
+            "audio_error": audio_error_detail,
             "phrase": clean_text
         }
 
