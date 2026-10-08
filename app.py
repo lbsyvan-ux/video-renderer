@@ -128,30 +128,39 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
                 audio_error_detail = str(e)
                 has_audio = False
 
-        # 3. Formater le texte (lignes courtes et percutantes comme sur TikTok/Reels)
+        # 3. Formater le texte : chaque ligne est centrée individuellement (style citation / meme TikTok)
         clean_text = req.text.strip().strip('"').strip("'")
-        wrapped_text = textwrap.fill(clean_text, width=22)
-        with open(text_file_path, "w", encoding="utf-8") as f:
-            f.write(wrapped_text)
+        lines = textwrap.wrap(clean_text, width=24)
+        if not lines:
+            lines = [clean_text]
 
         font_path = get_font_path()
         font_param = f":fontfile='{font_path}'" if font_path else ""
-        escaped_text_path = str(text_file_path).replace(":", "\\:")
 
-        # Style exact de l'image de référence :
-        # - Police Montserrat Bold (sans-serif gras et net)
-        # - Texte blanc pur (fontcolor=white)
-        # - Épais contour noir autour de chaque lettre (borderw=5:bordercolor=black)
-        # - Ombre portée nette (shadowcolor=black@0.8:shadowx=3:shadowy=3)
-        # - Pas de boîte d'arrière-plan (box=0)
+        font_size = req.font_size or 58
+        line_spacing = 24
+        line_height = font_size + line_spacing
+        total_text_height = (len(lines) - 1) * line_height + font_size
+
+        drawtext_filters = []
+        for idx, line in enumerate(lines):
+            line_file = temp_dir / f"line_{idx}.txt"
+            with open(line_file, "w", encoding="utf-8") as f:
+                f.write(line)
+            escaped_line_path = str(line_file).replace(":", "\\:")
+            y_pos = f"(h-{total_text_height})/2+{idx * line_height}"
+            drawtext_filters.append(
+                f"drawtext=textfile='{escaped_line_path}'{font_param}:"
+                f"fontsize={font_size}:fontcolor=white:"
+                f"x=(w-text_w)/2:y={y_pos}:"
+                f"borderw=5:bordercolor=black:"
+                f"shadowcolor=black@0.8:shadowx=3:shadowy=3"
+            )
+
         vf_filter = (
-            f"scale=1080:1920:force_original_aspect_ratio=increase,"
-            f"crop=1080:1920,"
-            f"drawtext=textfile='{escaped_text_path}'{font_param}:"
-            f"fontsize={req.font_size}:fontcolor=white:line_spacing=22:"
-            f"x=(w-text_w)/2:y=(h-text_h)/2:"
-            f"borderw=5:bordercolor=black:"
-            f"shadowcolor=black@0.8:shadowx=3:shadowy=3"
+            "scale=1080:1920:force_original_aspect_ratio=increase,"
+            "crop=1080:1920," +
+            ",".join(drawtext_filters)
         )
 
         fade_out_start = max(1.0, req.duration - 1.0)
