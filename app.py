@@ -36,11 +36,13 @@ DEFAULT_AUDIO_TRACKS = [
     "https://upload.wikimedia.org/wikipedia/commons/d/d0/Moonlight_Sonata.ogg"
 ]
 
+LOCAL_FONT = Path(__file__).parent / "Montserrat-Bold.ttf"
+
 FONT_CANDIDATES = [
+    str(LOCAL_FONT),
+    "/app/Montserrat-Bold.ttf",
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
-    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
 ]
 
 def get_font_path():
@@ -54,7 +56,7 @@ class RenderRequest(BaseModel):
     text: str
     audio_url: Optional[str] = None
     duration: Optional[int] = 7
-    font_size: Optional[int] = 52
+    font_size: Optional[int] = 60
 
 def cleanup_old_videos(max_age_seconds: int = 10800):
     now = time.time()
@@ -71,7 +73,7 @@ def health_check():
     return {
         "status": "ok",
         "service": "Meme Video Renderer API",
-        "message": "Ready to render Reels and TikToks with gentle background music"
+        "message": "Ready to render Reels and TikToks with TikTok-style Montserrat typography"
     }
 
 @app.post("/render")
@@ -105,7 +107,7 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
                 if chunk:
                     f.write(chunk)
 
-        # 2. Télécharger la musique douce (soit personnalisée, soit sélection aléatoire par défaut)
+        # 2. Télécharger la musique douce
         target_audio_url = req.audio_url if req.audio_url else random.choice(DEFAULT_AUDIO_TRACKS)
         has_audio = False
         try:
@@ -116,13 +118,12 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
                         if chunk:
                             f.write(chunk)
                 has_audio = True
-        except Exception as e:
-            # En cas de souci avec l'audio, on continue sans bloquer la vidéo
+        except Exception:
             has_audio = False
 
-        # 3. Formater le texte
+        # 3. Formater le texte (lignes courtes et percutantes comme sur TikTok/Reels)
         clean_text = req.text.strip().strip('"').strip("'")
-        wrapped_text = textwrap.fill(clean_text, width=25)
+        wrapped_text = textwrap.fill(clean_text, width=22)
         with open(text_file_path, "w", encoding="utf-8") as f:
             f.write(wrapped_text)
 
@@ -130,21 +131,25 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
         font_param = f":fontfile='{font_path}'" if font_path else ""
         escaped_text_path = str(text_file_path).replace(":", "\\:")
 
+        # Style exact de l'image de référence :
+        # - Police Montserrat Bold (sans-serif gras et net)
+        # - Texte blanc pur (fontcolor=white)
+        # - Épais contour noir autour de chaque lettre (borderw=5:bordercolor=black)
+        # - Ombre portée nette (shadowcolor=black@0.8:shadowx=3:shadowy=3)
+        # - Pas de boîte d'arrière-plan (box=0)
         vf_filter = (
             f"scale=1080:1920:force_original_aspect_ratio=increase,"
             f"crop=1080:1920,"
             f"drawtext=textfile='{escaped_text_path}'{font_param}:"
-            f"fontsize={req.font_size}:fontcolor=white:line_spacing=18:"
+            f"fontsize={req.font_size}:fontcolor=white:line_spacing=22:"
             f"x=(w-text_w)/2:y=(h-text_h)/2:"
-            f"box=1:boxcolor=black@0.45:boxborderw=24:"
-            f"shadowcolor=black@0.8:shadowx=2:shadowy=2"
+            f"borderw=5:bordercolor=black:"
+            f"shadowcolor=black@0.8:shadowx=3:shadowy=3"
         )
 
-        # 4. Construire la commande FFmpeg (avec ou sans audio)
         fade_out_start = max(1.0, req.duration - 1.5)
 
         if has_audio:
-            # Mix vidéo + musique douce (volume 30%, fade-in doux 0.8s, fade-out sur la fin 1.5s)
             filter_complex = (
                 f"[0:v]{vf_filter}[v];"
                 f"[1:a]volume=0.30,afade=t=in:st=0:d=0.8,afade=t=out:st={fade_out_start}:d=1.5[a]"
