@@ -14,7 +14,6 @@ from typing import Optional
 
 app = FastAPI(title="Meme Video Renderer API", version="1.0.0")
 
-# CORS pour autoriser tout appel externe (n8n, front, etc.)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -26,7 +25,6 @@ app.add_middleware(
 VIDEOS_DIR = Path("/app/videos")
 VIDEOS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Polices disponibles sur Debian/Ubuntu
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
     "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf",
@@ -47,7 +45,6 @@ class RenderRequest(BaseModel):
     font_size: Optional[int] = 52
 
 def cleanup_old_videos(max_age_seconds: int = 10800):
-    """Supprime les vidéos générées de plus de 3 heures pour ne jamais saturer le disque."""
     now = time.time()
     for file in VIDEOS_DIR.glob("*.mp4"):
         try:
@@ -67,7 +64,6 @@ def health_check():
 
 @app.post("/render")
 async def render_video(req: RenderRequest, request: Request, background_tasks: BackgroundTasks):
-    # Lancement du nettoyage en arrière-plan
     background_tasks.add_task(cleanup_old_videos)
 
     task_id = str(uuid.uuid4())[:8]
@@ -80,7 +76,6 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
     output_video_path = VIDEOS_DIR / output_filename
 
     try:
-        # 1. Télécharger la vidéo source
         headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
@@ -96,21 +91,14 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
                 if chunk:
                     f.write(chunk)
 
-        # 2. Formater le texte avec retour à la ligne automatique (environ 24-26 caractères par ligne)
-        # Nettoyer d'éventuels guillemets superflus
         clean_text = req.text.strip().strip('"').strip("'")
         wrapped_text = textwrap.fill(clean_text, width=25)
 
         with open(text_file_path, "w", encoding="utf-8") as f:
             f.write(wrapped_text)
 
-        # 3. Construire le filtre FFmpeg
         font_path = get_font_path()
         font_param = f":fontfile='{font_path}'" if font_path else ""
-
-        # - Redimensionne et recadre proprement en 1080x1920 (9:16 vertical)
-        # - drawtext : texte centré, avec boîte semi-transparente sombre pour lisibilité parfaite
-        # - Échappement des deux-points dans le chemin du fichier texte pour FFmpeg
         escaped_text_path = str(text_file_path).replace(":", "\\:")
         
         vf_filter = (
@@ -123,19 +111,23 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
             f"shadowcolor=black@0.8:shadowx=2:shadowy=2"
         )
 
-        # 4. Exécuter FFmpeg
+        # Paramètres optimisés pour respecter la limite 512MB RAM de Render:
+        # -threads 1, -preset ultrafast, -r 30 (limite l'empreinte mémoire à <100MB)
         cmd = [
             "ffmpeg",
             "-y",
+            "-threads", "1",
             "-i", str(input_video_path),
             "-vf", vf_filter,
             "-t", str(req.duration),
+            "-r", "30",
             "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "22",
+            "-preset", "ultrafast",
+            "-tune", "fastdecode",
+            "-crf", "24",
             "-pix_fmt", "yuv420p",
             "-c:a", "aac",
-            "-b:a", "128k",
+            "-b:a", "96k",
             "-movflags", "+faststart",
             str(output_video_path)
         ]
@@ -147,8 +139,6 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
                 detail=f"Erreur d'encodage FFmpeg: {result.stderr[-500:]}"
             )
 
-        # 5. Déterminer l'URL publique absolue de la vidéo pour n8n et Metricool
-        # Hugging Face Spaces transmet l'hôte via X-Forwarded-Host
         forwarded_host = request.headers.get("x-forwarded-host")
         forwarded_proto = request.headers.get("x-forwarded-proto", "https")
         if forwarded_host:
@@ -167,7 +157,6 @@ async def render_video(req: RenderRequest, request: Request, background_tasks: B
         }
 
     finally:
-        # Nettoyage des fichiers temporaires d'entrée
         shutil.rmtree(temp_dir, ignore_errors=True)
 
 @app.get("/videos/{filename}")
